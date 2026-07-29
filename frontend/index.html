@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>US Group Analytics</title>
+    <link rel="icon" type="image/png" href="/logo-lion.png" />
+    <script>
+      // always fetch a fresh stylesheet - avoids the browser serving a stale
+      // cached style.css after edits (mirrors the no-store fetch for app.js below)
+      const styleLink = document.createElement('link');
+      styleLink.rel = 'stylesheet';
+      styleLink.href = '/style.css?t=' + Date.now();
+      document.head.appendChild(styleLink);
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+    <!-- Google Identity Services: powers the "Continue with Google" button -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script>
+      fetch('/app.js', { cache: 'no-store' }) // always get the latest app.js, never a stale cached copy
+        .then((r) => r.text())
+        .then((code) => {
+          const { code: transformed } = Babel.transform(code, {
+            presets: [['react', { runtime: 'classic' }]],
+            filename: 'app.js',
+          });
+          const script = document.createElement('script');
+          script.text = transformed;
+          document.body.appendChild(script);
+        });
+    </script>
+  </body>
+</html>

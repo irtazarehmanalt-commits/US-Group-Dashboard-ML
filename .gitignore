@@ -1,0 +1,28 @@
+# --- Secrets ---
+backend/.env
+*.env
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+
+# --- Virtual environment (backend/venv, already populated locally) ---
+backend/venv/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Proprietary dataset (real US Group order/customer/financial data) ---
+backend/data/*.csv
+
+# --- Scraper output (regenerated staging file, not source) ---
+backend/scraper/scraped_products.json
+
+# --- OS / editor cruft ---
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+
+# --- Claude Code local runtime state ---
+.claude/*.lock
