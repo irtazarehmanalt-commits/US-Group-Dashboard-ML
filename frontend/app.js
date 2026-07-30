@@ -41,6 +41,7 @@ const ICON_PATHS = {
   // --- added for the market scraper page ---
   globe: <><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>,
   database: <><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" /><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" /></>,
+  activity: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />,
 };
 
 function Icon({ name, size = 18 }) {
@@ -167,6 +168,25 @@ const approveUserRequest = (id) => apiRequest(`/auth/approve/${id}`, { method: '
 // DELETE /auth/users/:id -> removes an account (rejects a pending request or
 // deletes a created account). Admin accounts are refused by the backend.
 const deleteUserRequest = (id) => apiRequest(`/auth/users/${id}`, { method: 'DELETE' });
+// GET /audit-log/:id -> { user: {name, email, role, ...}, actions: [{action, details, created_at}] }
+// step-by-step activity trail for one user, most recent first. Admin only.
+const fetchAuditLog = (id) => apiRequest(`/audit-log/${id}`);
+// POST /warnings/generate { user_id, actions } -> { letter } - LLM drafts a
+// warning letter from the selected audit-log actions. Admin only.
+const generateWarningLetter = (userId, actions) =>
+  apiRequest('/warnings/generate', { method: 'POST', body: JSON.stringify({ user_id: userId, actions }) });
+// POST /warnings/send { user_id, letter, send_email, actions } -> { id, emailed }
+// Saves the (possibly admin-edited) letter and optionally emails it. Admin only.
+const sendWarning = (userId, letter, sendEmailFlag, actions) =>
+  apiRequest('/warnings/send', {
+    method: 'POST',
+    body: JSON.stringify({ user_id: userId, letter, send_email: sendEmailFlag, actions }),
+  });
+// GET /warnings/mine -> [{id, letter, emailed, created_at}] for the logged-in user
+const fetchMyWarnings = () => apiRequest('/warnings/mine');
+// GET /warnings/sent -> [{id, user_name, user_email, letter, emailed, created_at}]
+// every warning issued, across all recipients. Admin only.
+const fetchSentWarnings = () => apiRequest('/warnings/sent');
 
 const fetchOptions = () => apiRequest('/options');
 const fetchDashboardStats = () => apiRequest('/dashboard-stats');
@@ -212,6 +232,25 @@ function downloadCustomReportPdf(pdfBase64) {
   const link = document.createElement('a');
   link.href = url;
   link.download = `US_Group_Analytics_Report_${today}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+// POST /warnings/pdf { letter } -> { pdf_base64 } - renders whatever letter
+// text the caller has on screen (an admin's draft, or a user's own already-
+// saved warning) as a PDF with the same letterhead as the standard report.
+const requestWarningPdf = (letterText) =>
+  apiRequest('/warnings/pdf', { method: 'POST', body: JSON.stringify({ letter: letterText }) });
+
+function downloadWarningLetterPdf(pdfBase64) {
+  const blob = base64ToBlob(pdfBase64, 'application/pdf');
+  const url = URL.createObjectURL(blob);
+  const today = new Date().toISOString().slice(0, 10);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `US_Group_Warning_Letter_${today}.pdf`;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -770,10 +809,20 @@ function Sidebar({ page, onNavigate, onLogout, role }) {
           <Icon name="globe" size={17} />
           <span>Market Scraper</span>
         </button>
+        <button className={linkClass('warnings')} onClick={() => onNavigate('warnings')}>
+          <Icon name="alertTriangle" size={17} />
+          <span>Warnings</span>
+        </button>
         {role === 'admin' && (
           <button className={linkClass('admin')} onClick={() => onNavigate('admin')}>
             <Icon name="lock" size={17} />
             <span>Accounts</span>
+          </button>
+        )}
+        {role === 'admin' && (
+          <button className={linkClass('audit-log')} onClick={() => onNavigate('audit-log')}>
+            <Icon name="activity" size={17} />
+            <span>Audit Log</span>
           </button>
         )}
       </nav>
@@ -1877,6 +1926,483 @@ function AdminPage({ auth }) {
   );
 }
 
+// Human-readable labels + a rough grouping (for the colored badge) per raw
+// action string stored in audit_log/chat_history. Falls back to the raw
+// action name for anything not listed here, so a new action type never
+// renders blank.
+const AUDIT_ACTION_LABELS = {
+  login: 'Login', signup: 'Signup', chat: 'Chat',
+  predict_profitability: 'Prediction', predict_payment_delay: 'Prediction',
+  generate_report: 'Report', custom_report: 'Report',
+  scrape: 'Scrape', save_scrape: 'Scrape',
+  approve_user: 'Admin', reject_user: 'Admin', delete_user: 'Admin',
+};
+const AUDIT_ACTION_TONES = {
+  login: 'success', signup: 'success',
+  approve_user: 'success', reject_user: 'danger', delete_user: 'danger',
+};
+
+// Audit Log - Only reachable from the sidebar when role === 'admin'; the
+// backend's own /audit-log/:id route re-checks admin on every call regardless.
+// Re-verifies the admin's password before showing anything, same as the
+// Accounts page, since this exposes every user's activity.
+function AuditLogPage({ auth }) {
+  const [verified, setVerified] = useState(false);
+  const [password, setPassword] = useState('');
+  const [verifying, setVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState(null);
+
+  const [users, setUsers] = useState(null);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersError, setUsersError] = useState(null);
+
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [actions, setActions] = useState(null);
+  const [actionsLoading, setActionsLoading] = useState(false);
+  const [actionsError, setActionsError] = useState(null);
+
+  // Warning-letter flow: pick flagged actions -> LLM drafts a letter (editable)
+  // -> Send Warning (saved, shows on the user's own Warnings tab) or Send
+  // Email (saved + emailed).
+  const [warningMode, setWarningMode] = useState(false);
+  const [selectedActionIdx, setSelectedActionIdx] = useState(() => new Set());
+  const [letter, setLetter] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState(null);
+  const [sendingWarning, setSendingWarning] = useState(false);
+  const [sendWarningError, setSendWarningError] = useState(null);
+  const [warningSentMsg, setWarningSentMsg] = useState(null);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [pdfError, setPdfError] = useState(null);
+
+  function resetWarningFlow() {
+    setWarningMode(false);
+    setSelectedActionIdx(new Set());
+    setLetter(null);
+    setGenerateError(null);
+    setSendWarningError(null);
+    setWarningSentMsg(null);
+    setPdfError(null);
+  }
+
+  function toggleWarningMode() {
+    if (warningMode) resetWarningFlow();
+    else setWarningMode(true);
+  }
+
+  function toggleActionSelected(i) {
+    setSelectedActionIdx((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i); else next.add(i);
+      return next;
+    });
+  }
+
+  function chosenActions() {
+    return [...selectedActionIdx].sort((a, b) => a - b).map((i) => actions[i]);
+  }
+
+  async function handleGenerateLetter() {
+    setGenerating(true);
+    setGenerateError(null);
+    try {
+      const data = await generateWarningLetter(selectedUser.id, chosenActions());
+      setLetter(data.letter);
+    } catch (err) {
+      setGenerateError(err.message);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function handleSendWarning(viaEmail) {
+    setSendingWarning(true);
+    setSendWarningError(null);
+    try {
+      const data = await sendWarning(selectedUser.id, letter, viaEmail, chosenActions());
+      setWarningSentMsg(
+        viaEmail
+          ? (data.emailed ? 'Warning saved and emailed to the user.' : 'Warning saved, but the email failed to send.')
+          : "Warning saved - it now appears on the user's Warnings tab."
+      );
+      setWarningMode(false);
+      setSelectedActionIdx(new Set());
+      setLetter(null);
+    } catch (err) {
+      setSendWarningError(err.message);
+    } finally {
+      setSendingWarning(false);
+    }
+  }
+
+  async function handleDownloadPdf() {
+    setDownloadingPdf(true);
+    setPdfError(null);
+    try {
+      const data = await requestWarningPdf(letter);
+      downloadWarningLetterPdf(data.pdf_base64);
+    } catch (err) {
+      setPdfError(err.message);
+    } finally {
+      setDownloadingPdf(false);
+    }
+  }
+
+  function closeUser() {
+    setSelectedUser(null);
+    resetWarningFlow();
+  }
+
+  async function handleVerify(e) {
+    e.preventDefault();
+    setVerifying(true);
+    setVerifyError(null);
+    try {
+      const { verified: ok } = await verifyPasswordRequest(auth.email, password);
+      if (!ok) {
+        setVerifyError('Incorrect password.');
+        return;
+      }
+      setVerified(true);
+      setUsersLoading(true);
+      try {
+        setUsers(await fetchAllUsers());
+      } catch (err) {
+        setUsersError(err.message);
+      } finally {
+        setUsersLoading(false);
+      }
+    } catch (err) {
+      setVerifyError(err.message);
+    } finally {
+      setVerifying(false);
+    }
+  }
+
+  async function openUser(u) {
+    setSelectedUser(u);
+    resetWarningFlow();
+    setActions(null);
+    setActionsError(null);
+    setActionsLoading(true);
+    try {
+      const data = await fetchAuditLog(u.id);
+      setActions(data.actions);
+    } catch (err) {
+      setActionsError(err.message);
+    } finally {
+      setActionsLoading(false);
+    }
+  }
+
+  if (!verified) {
+    return (
+      <div className="app-content admin-verify-screen">
+        <header className="page-header">
+          <div className="page-eyebrow">Admin</div>
+          <h1 className="page-title">Confirm your password</h1>
+          <p className="page-subtitle">For your security, re-enter your password to view the audit log.</p>
+        </header>
+
+        <form className="card card-padded admin-verify-card" onSubmit={handleVerify}>
+          <div className="login-field">
+            <label>Password</label>
+            <div className="login-input-wrap">
+              <Icon name="lock" size={16} />
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                autoComplete="current-password"
+                autoFocus
+                required
+              />
+            </div>
+          </div>
+
+          {verifyError && <div className="form-error">{verifyError}</div>}
+
+          <button type="submit" className="btn btn-primary" disabled={verifying}>
+            {verifying && <span className="spinner" />}
+            {verifying ? 'Confirming...' : 'Confirm'}
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  if (selectedUser) {
+    const chosenCount = selectedActionIdx.size;
+    return (
+      <div className="app-content">
+        <button type="button" className="btn btn-ghost audit-back-btn" onClick={closeUser}>
+          <Icon name="arrowLeft" size={16} />
+          <span>Back to all users</span>
+        </button>
+
+        <header className="page-header audit-detail-header">
+          <div>
+            <div className="page-eyebrow">Audit Log</div>
+            <h1 className="page-title">{selectedUser.name}</h1>
+            <p className="page-subtitle">
+              {selectedUser.email}
+              {' · '}
+              <span className={`admin-role-badge admin-role-${selectedUser.role}`}>{selectedUser.role}</span>
+            </p>
+          </div>
+          {actions && actions.length > 0 && letter === null && (
+            <button type="button" className={`btn ${warningMode ? 'btn-ghost' : 'btn-danger'}`} onClick={toggleWarningMode}>
+              <Icon name="alertTriangle" size={16} />
+              <span>{warningMode ? 'Cancel' : 'Send Warning'}</span>
+            </button>
+          )}
+        </header>
+
+        {warningSentMsg && <div className="form-success">{warningSentMsg}</div>}
+
+        <div className="card card-padded">
+          {actionsLoading && (
+            <div className="chat-history-status">
+              <span className="spinner spinner-accent" />
+              <span>Loading activity...</span>
+            </div>
+          )}
+          {!actionsLoading && actionsError && (
+            <div className="form-error">Could not load activity: {actionsError}</div>
+          )}
+          {!actionsLoading && !actionsError && actions && actions.length === 0 && (
+            <div className="chat-history-status">No recorded activity for this user yet.</div>
+          )}
+          {!actionsLoading && !actionsError && actions && actions.length > 0 && (
+            <ul className="audit-timeline">
+              {actions.map((item, i) => (
+                <li
+                  className={`audit-timeline-item${warningMode ? ' audit-timeline-item-selectable' : ''}`}
+                  key={i}
+                  onClick={warningMode ? () => toggleActionSelected(i) : undefined}
+                >
+                  {warningMode && (
+                    <input
+                      type="checkbox"
+                      className="audit-timeline-checkbox"
+                      checked={selectedActionIdx.has(i)}
+                      onChange={() => toggleActionSelected(i)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  )}
+                  <span className={`audit-action-badge audit-tone-${AUDIT_ACTION_TONES[item.action] || 'neutral'}`}>
+                    {AUDIT_ACTION_LABELS[item.action] || item.action}
+                  </span>
+                  <div className="audit-timeline-body">
+                    <div className="audit-timeline-details">{item.details}</div>
+                    <div className="audit-timeline-time">{formatHistoryTimestamp(item.created_at)}</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {warningMode && letter === null && (
+          <div className="card card-padded warning-compose-bar">
+            <span>{chosenCount} action{chosenCount === 1 ? '' : 's'} selected</span>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={chosenCount === 0 || generating}
+              onClick={handleGenerateLetter}
+            >
+              {generating && <span className="spinner" />}
+              {generating ? 'Drafting letter...' : 'Generate Warning Letter'}
+            </button>
+            {generateError && <div className="form-error">{generateError}</div>}
+          </div>
+        )}
+
+        {letter !== null && (
+          <div className="card card-padded warning-letter-card">
+            <div className="section-heading">Warning letter (review and edit before sending)</div>
+            <textarea
+              className="warning-letter-editor"
+              value={letter}
+              onChange={(e) => setLetter(e.target.value)}
+              rows={16}
+            />
+            {pdfError && <div className="form-error">{pdfError}</div>}
+            {sendWarningError && <div className="form-error">{sendWarningError}</div>}
+            <div className="warning-letter-actions">
+              <button type="button" className="btn btn-ghost" onClick={handleDownloadPdf} disabled={downloadingPdf}>
+                {downloadingPdf && <span className="spinner" />}
+                <Icon name="printer" size={14} />
+                <span>{downloadingPdf ? 'Preparing...' : 'Download PDF'}</span>
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => setLetter(null)} disabled={sendingWarning}>
+                Discard
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => handleSendWarning(false)} disabled={sendingWarning}>
+                {sendingWarning && <span className="spinner" />}
+                <span>Send Warning</span>
+              </button>
+              <button type="button" className="btn btn-primary" onClick={() => handleSendWarning(true)} disabled={sendingWarning}>
+                {sendingWarning && <span className="spinner" />}
+                <span>Send Email</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-content">
+      <header className="page-header">
+        <div className="page-eyebrow">Admin</div>
+        <h1 className="page-title">Audit Log</h1>
+        <p className="page-subtitle">Select a user to see everything they've done in the system, step by step.</p>
+      </header>
+
+      {usersLoading && (
+        <div className="chat-history-status">
+          <span className="spinner spinner-accent" />
+          <span>Loading accounts...</span>
+        </div>
+      )}
+      {usersError && <div className="form-error">Could not load accounts: {usersError}</div>}
+
+      {users && (
+        <div className="card card-padded">
+          <div className="admin-table-wrap">
+            <table className="admin-users-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u) => (
+                  <tr key={u.id} className="audit-user-row" onClick={() => openUser(u)}>
+                    <td>{u.name}</td>
+                    <td>{u.email}</td>
+                    <td><span className={`admin-role-badge admin-role-${u.role}`}>{u.role}</span></td>
+                    <td>{u.is_approved ? 'Approved' : 'Pending'}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-ghost admin-row-btn"
+                        onClick={(e) => { e.stopPropagation(); openUser(u); }}
+                      >
+                        View activity
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Warnings - visible to every logged-in user (not admin-gated). Admins see
+// every warning that's gone out ("Warnings Sent" - no one sends the admin a
+// warning); everyone else sees just their own, from the Audit Log page's
+// "Send Warning" flow.
+function WarningsPage({ auth }) {
+  const isAdmin = auth?.role === 'admin';
+  const [warnings, setWarnings] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [pdfError, setPdfError] = useState(null);
+
+  useEffect(() => {
+    const fetcher = isAdmin ? fetchSentWarnings : fetchMyWarnings;
+    fetcher()
+      .then(setWarnings)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [isAdmin]);
+
+  async function handleDownload(w) {
+    setDownloadingId(w.id);
+    setPdfError(null);
+    try {
+      const data = await requestWarningPdf(w.letter);
+      downloadWarningLetterPdf(data.pdf_base64);
+    } catch (err) {
+      setPdfError(err.message);
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
+  return (
+    <div className="app-content">
+      <header className="page-header">
+        <div className="page-eyebrow">{isAdmin ? 'Admin' : 'Notices'}</div>
+        <h1 className="page-title">{isAdmin ? 'Warnings Sent' : 'Warnings'}</h1>
+        <p className="page-subtitle">
+          {isAdmin
+            ? "Every formal notice your administration has issued, across all users."
+            : 'Formal notices issued to your account by an administrator.'}
+        </p>
+      </header>
+
+      {loading && (
+        <div className="chat-history-status">
+          <span className="spinner spinner-accent" />
+          <span>Loading warnings...</span>
+        </div>
+      )}
+      {!loading && error && <div className="form-error">Could not load warnings: {error}</div>}
+      {!loading && !error && warnings && warnings.length === 0 && (
+        <div className="card card-padded chat-history-status">
+          {isAdmin ? 'No warnings have been sent yet.' : 'No warnings on your account.'}
+        </div>
+      )}
+      {pdfError && <div className="form-error">Could not prepare PDF: {pdfError}</div>}
+      {!loading && !error && warnings && warnings.length > 0 && (
+        <div className="warnings-list">
+          {warnings.map((w) => (
+            <div className="card card-padded warning-card" key={w.id}>
+              <div className="warning-card-top">
+                <span className="audit-action-badge audit-tone-danger">Warning</span>
+                <div className="warning-card-top-right">
+                  <span className="warning-card-time">{formatHistoryTimestamp(w.created_at)}</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost admin-row-btn"
+                    onClick={() => handleDownload(w)}
+                    disabled={downloadingId === w.id}
+                  >
+                    {downloadingId === w.id ? <span className="spinner" /> : <Icon name="printer" size={14} />}
+                    <span>{downloadingId === w.id ? 'Preparing...' : 'Download PDF'}</span>
+                  </button>
+                </div>
+              </div>
+              {isAdmin && (
+                <div className="warning-card-recipient">
+                  To: <strong>{w.user_name}</strong> ({w.user_email})
+                  {w.emailed && <span className="warning-emailed-badge">Emailed</span>}
+                </div>
+              )}
+              <pre className="warning-letter-text">{w.letter}</pre>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Chatbot widget (ADDED - new feature, everything else in this file is
 // unchanged). Floating button in the bottom-right corner that opens a chat
@@ -2641,7 +3167,9 @@ function App() {
         {page === 'chat' && <ChatPage onAddToDashboard={addPinnedChart} />}
         {page === 'blog' && <BlogPage />}
         {page === 'scraper' && <ScraperPage />}
+        {page === 'warnings' && <WarningsPage auth={auth} />}
         {page === 'admin' && auth.role === 'admin' && <AdminPage auth={auth} />}
+        {page === 'audit-log' && auth.role === 'admin' && <AuditLogPage auth={auth} />}
       </div>
       {/* added: floating chat widget, rendered at the App level so it's available on every page */}
       <ChatWidget onAddToDashboard={addPinnedChart} />

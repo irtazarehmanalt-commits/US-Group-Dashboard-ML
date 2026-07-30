@@ -387,6 +387,16 @@ input, select {
   gap: 16px;
 }
 
+.form-success {
+  font-size: 13.5px;
+  color: var(--color-success);
+  background: var(--color-success-bg);
+  border: 1px solid var(--color-success-border);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 20px;
+}
+
 .form-error {
   font-size: 13.5px;
   color: var(--color-danger);
@@ -2530,6 +2540,203 @@ input, select {
 
 .scraper-table-wrap {
   overflow-x: auto;
+}
+
+/* Audit Log page */
+.audit-back-btn {
+  margin-bottom: 20px;
+}
+
+.audit-user-row {
+  cursor: pointer;
+}
+
+.audit-user-row:hover td {
+  background: var(--color-surface-strong);
+}
+
+.audit-timeline {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.audit-timeline-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+
+.audit-timeline-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.audit-timeline-details {
+  font-size: 13px;
+  color: var(--color-text-primary);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.audit-timeline-time {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.audit-action-badge {
+  flex-shrink: 0;
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 620;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.audit-tone-neutral {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-strong);
+}
+
+.audit-tone-success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid var(--color-success-border);
+}
+
+.audit-tone-danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger-border);
+}
+
+.audit-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.audit-timeline-item-selectable {
+  cursor: pointer;
+}
+
+.audit-timeline-item-selectable:hover {
+  border-color: var(--color-border-strong);
+}
+
+.audit-timeline-checkbox {
+  flex-shrink: 0;
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.warning-compose-bar {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.warning-compose-bar span {
+  font-size: 13.5px;
+  color: var(--color-text-secondary);
+}
+
+.warning-letter-card {
+  margin-top: 16px;
+}
+
+.warning-letter-editor {
+  width: 100%;
+  margin-top: 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.6;
+  padding: 16px;
+  resize: vertical;
+}
+
+.warning-letter-editor:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.warning-letter-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.warnings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.warning-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.warning-card-top-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.warning-card-time {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.warning-card-recipient {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 12px;
+}
+
+.warning-emailed-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 620;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid var(--color-success-border);
+}
+
+.warning-letter-text {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  margin: 0;
 }
 
 .scraper-table {

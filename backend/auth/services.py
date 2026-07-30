@@ -1,31 +1,21 @@
-import base64
 import html
 import os
 import random
 import secrets
 import string
 from datetime import datetime, timedelta
-from email.message import EmailMessage
 
 import requests
 from jose import jwt
 from sqlalchemy import text
 from chatbot.db import pg_engine
+from audit import log_action
+from mailer import send_email
 
 SECRET_KEY = "change-this-to-something-random-later"  # fine for now, real app needs a proper secret
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 
-# --- OTP email (Gmail API over HTTPS) config ---
-# We send via the Gmail REST API, NOT SMTP: this network blocks SMTP ports
-# (465/587), but HTTPS/443 is open. Requires a one-time OAuth refresh token for
-# the sender account with the gmail.send scope - run auth/gmail_oauth_setup.py to
-# obtain GMAIL_REFRESH_TOKEN. If any of the three are missing, send_otp_email()
-# returns False and the caller falls back to showing the code on screen.
-SMTP_EMAIL = os.getenv("SMTP_EMAIL", "irtazaworks123@gmail.com")  # the "From" address
-GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID")
-GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET")
-GMAIL_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN")
 OTP_TTL_MINUTES = 10
 
 # Optional public URL of the running app - when set, the approval email
@@ -42,81 +32,8 @@ pending_otps = {}  # temporary in-memory store: {email: {name, password, otp, ex
 def generate_otp() -> str:
     return ''.join(random.choices(string.digits, k=6))
 
-def _gmail_access_token() -> str:
-    """Exchange the long-lived refresh token for a short-lived access token."""
-    resp = requests.post("https://oauth2.googleapis.com/token", data={
-        "client_id": GMAIL_CLIENT_ID,
-        "client_secret": GMAIL_CLIENT_SECRET,
-        "refresh_token": GMAIL_REFRESH_TOKEN,
-        "grant_type": "refresh_token",
-    }, timeout=15)
-    resp.raise_for_status()
-    return resp.json()["access_token"]
-
-# --- Email templates -------------------------------------------------------
-# One shared HTML shell (header/footer chrome, matches the dashboard's dark
-# navy + mint accent look) so the three emails below only supply their inner
-# content. Table-based layout + inline styles because email clients ignore
-# <style> blocks and modern CSS.
-
-def _email_shell(body_html: str) -> str:
-    return f"""\
-<!doctype html>
-<html>
-  <body style="margin:0;padding:0;background:#eef1f5;font-family:'Segoe UI',Helvetica,Arial,sans-serif;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef1f5;padding:32px 16px;">
-      <tr>
-        <td align="center">
-          <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 8px 24px rgba(15,23,42,0.08);">
-            <tr>
-              <td style="background:#0b1220;padding:24px 32px;">
-                <span style="color:#b8f7e4;font-size:20px;font-weight:700;letter-spacing:0.5px;">US GROUP</span>
-                <div style="color:#9aa0ac;font-size:12px;margin-top:2px;">Analytics Dashboard</div>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:32px;color:#1f2937;font-size:15px;line-height:1.6;">
-                {body_html}
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:20px 32px;background:#f7f8fa;color:#9aa0ac;font-size:12px;">
-                This is an automated message from the US Group Analytics Dashboard. Please don't reply to this email.
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>
-"""
-
-
-def _send_email(to_email: str, subject: str, body_html: str, text_fallback: str) -> bool:
-    """Send one HTML email (with a plain-text fallback part) from SMTP_EMAIL via
-    the Gmail API. Returns False if Gmail OAuth isn't configured - callers decide
-    what that means for them (OTP falls back to on-screen; approval/rejection
-    just skip silently, since account creation shouldn't hinge on notification
-    delivery)."""
-    if not (GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET and GMAIL_REFRESH_TOKEN):
-        return False
-    access_token = _gmail_access_token()
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = SMTP_EMAIL
-    msg["To"] = to_email
-    msg.set_content(text_fallback)
-    msg.add_alternative(_email_shell(body_html), subtype="html")
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    resp = requests.post(
-        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-        headers={"Authorization": f"Bearer {access_token}"},
-        json={"raw": raw}, timeout=15,
-    )
-    resp.raise_for_status()
-    return True
-
+# --- Email templates (bodies only - mailer.send_email supplies the shared
+# shell/Gmail plumbing) --------------------------------------------------
 
 def send_otp_email(to_email: str, otp: str, name: str) -> bool:
     """Email a verification code from SMTP_EMAIL via the Gmail API. Returns False
@@ -142,7 +59,7 @@ def send_otp_email(to_email: str, otp: str, name: str) -> bool:
         f"your request - you won't be able to log in until then.\n\n"
         f"If you didn't request this, ignore this email."
     )
-    return _send_email(to_email, "Your US Group verification code", body_html, text_fallback)
+    return send_email(to_email, "Your US Group verification code", body_html, text_fallback)
 
 
 def send_approval_email(to_email: str, name: str) -> bool:
@@ -169,7 +86,7 @@ def send_approval_email(to_email: str, name: str) -> bool:
         f"administrator. You can now log in with the email and password you signed up with."
         + (f"\n\n{APP_URL}" if APP_URL else "")
     )
-    return _send_email(to_email, "Your US Group account has been approved", body_html, text_fallback)
+    return send_email(to_email, "Your US Group account has been approved", body_html, text_fallback)
 
 
 def send_rejection_email(to_email: str, name: str) -> bool:
@@ -189,7 +106,7 @@ def send_rejection_email(to_email: str, name: str) -> bool:
         f"administrator and was not approved. If you believe this is a mistake, please "
         f"contact your administrator."
     )
-    return _send_email(to_email, "Your US Group account request was not approved", body_html, text_fallback)
+    return send_email(to_email, "Your US Group account request was not approved", body_html, text_fallback)
 
 def start_signup(name: str, email: str, password: str) -> dict:
     otp = generate_otp()
@@ -223,6 +140,7 @@ def verify_otp_and_create_account(email: str, entered_otp: str) -> bool:
         )
         conn.commit()
 
+    log_action(email, pending["name"], "signup", "Signed up")
     del pending_otps[email]
     return True
 
@@ -249,6 +167,7 @@ def login(email: str, password: str) -> dict:
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
+    log_action(user["email"], user["name"], "login", "Logged in")
     return {"token": token, "name": user["name"], "role": user["role"]}
 
 def verify_user_password(email: str, password: str) -> bool:
@@ -259,7 +178,7 @@ def verify_user_password(email: str, password: str) -> bool:
         )
         return result.first() is not None
 
-def approve_user(user_id: int) -> bool:
+def approve_user(user_id: int, admin_email: str = "", admin_name: str = "") -> bool:
     with pg_engine.connect() as conn:
         row = conn.execute(
             text("UPDATE users SET is_approved = TRUE WHERE id = :id RETURNING name, email"),
@@ -272,16 +191,17 @@ def approve_user(user_id: int) -> bool:
         send_approval_email(row["email"], row["name"])
     except Exception as exc:
         print(f"[auth] approval email failed for {row['email']}: {exc}")
+    log_action(admin_email, admin_name, "approve_user", f"Approved {row['name']} ({row['email']})")
     return True
 
-def delete_user(user_id: int) -> bool:
+def delete_user(user_id: int, admin_email: str = "", admin_name: str = "") -> bool:
     """Delete a user account (used for both 'reject pending request' and 'delete
     account'). Refuses to delete admin accounts so the dashboard can't be locked
     out. Returns False if the user doesn't exist, True if a row was deleted.
 
     Only sends a rejection email when the account was still pending - deleting
     an already-approved account later isn't the same thing as rejecting it, so
-    that case stays silent."""
+    that case stays silent. The admin's own action is still logged either way."""
     with pg_engine.connect() as conn:
         row = conn.execute(
             text("SELECT name, email, role, is_approved FROM users WHERE id = :id"), {"id": user_id}
@@ -292,11 +212,16 @@ def delete_user(user_id: int) -> bool:
             raise ValueError("Admin accounts can't be deleted.")
         result = conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
         conn.commit()
-    if result.rowcount > 0 and not row["is_approved"]:
-        try:
-            send_rejection_email(row["email"], row["name"])
-        except Exception as exc:
-            print(f"[auth] rejection email failed for {row['email']}: {exc}")
+    if result.rowcount > 0:
+        was_pending = not row["is_approved"]
+        if was_pending:
+            try:
+                send_rejection_email(row["email"], row["name"])
+            except Exception as exc:
+                print(f"[auth] rejection email failed for {row['email']}: {exc}")
+        action = "reject_user" if was_pending else "delete_user"
+        verb = "Rejected pending sign-up" if was_pending else "Deleted account"
+        log_action(admin_email, admin_name, action, f"{verb}: {row['name']} ({row['email']})")
     return result.rowcount > 0
 
 def verify_token(token: str) -> dict:
@@ -350,6 +275,7 @@ def google_login(credential: str) -> dict:
                 {"n": name, "e": email, "p": "google:" + secrets.token_hex(16)},
             )
             conn.commit()
+            log_action(email, name, "signup", "Signed up with Google")
             return {"pending": True}
 
     if not user["is_approved"]:
@@ -363,4 +289,5 @@ def google_login(credential: str) -> dict:
         "exp": datetime.utcnow() + timedelta(hours=TOKEN_EXPIRE_HOURS),
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    log_action(email, user["name"], "login", "Logged in with Google")
     return {"token": token, "name": user["name"], "role": user["role"]}

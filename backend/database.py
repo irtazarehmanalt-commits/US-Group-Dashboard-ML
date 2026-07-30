@@ -90,6 +90,41 @@ def create_scraped_products_table():
         conn.commit()
     print("scraped_products table ready.")
 
+def create_warnings_table():
+    engine = get_engine()
+    with engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS warnings (
+                id SERIAL PRIMARY KEY,
+                user_email TEXT NOT NULL,
+                user_name TEXT,
+                letter TEXT NOT NULL,
+                actions_context TEXT,
+                issued_by_email TEXT,
+                issued_by_name TEXT,
+                emailed BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """))
+        conn.commit()
+    print("warnings table ready.")
+
+def create_audit_log_table():
+    engine = get_engine()
+    with engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id SERIAL PRIMARY KEY,
+                user_email TEXT,
+                user_name TEXT,
+                action TEXT NOT NULL,
+                details TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """))
+        conn.commit()
+    print("audit_log table ready.")
+
 # added: turn a scraped price string into a number for the NUMERIC price column.
 # Grabs the FIRST number in the string, so messy labels like
 # "Temporary Price is $59.99 Original Price was $84.95" store the current price
@@ -141,4 +176,6 @@ if __name__ == '__main__':
     create_chat_history_table()
     create_users_table()
     create_scraped_products_table()
+    create_audit_log_table()
+    create_warnings_table()
     seed_admin_account()

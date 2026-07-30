@@ -16,6 +16,15 @@ from blog import fetch_textile_news
 from scraper.selenium_scraper import scrape_category, save_to_json, load_from_json
 from scraper.scheduler import start_scheduler
 from database import save_products
+from audit import log_action, get_user_timeline
+from user_warnings import (
+    generate_warning_letter,
+    create_warning,
+    get_warnings_for_user,
+    get_all_sent_warnings,
+    send_warning_email,
+    build_warning_pdf,
+)
 from auth.services import (
     start_signup,
     verify_otp_and_create_account,
@@ -277,9 +286,12 @@ from chatbot.report_builder import build_report_data
 from chatbot.pdf_builder import build_pdf
 
 @app.get("/report/generate")
-def generate_report():
+def generate_report(user: Optional[dict] = Depends(get_current_user_optional)):
     sections = build_report_data()
     pdf_bytes = build_pdf(sections)
+
+    if user:
+        log_action(user.get("email"), user.get("name"), "generate_report", "Generated the standard PDF report")
 
     return {
         "sections": sections,
@@ -299,8 +311,12 @@ class CustomReportRequest(BaseModel):
     items: list[ReportItem]
 
 @app.post("/report/custom")
-def generate_custom_report(req: CustomReportRequest):
+def generate_custom_report(req: CustomReportRequest, user: Optional[dict] = Depends(get_current_user_optional)):
     pdf_bytes = build_custom_report_pdf([item.model_dump() for item in req.items])
+    if user:
+        count = len(req.items)
+        log_action(user.get("email"), user.get("name"), "custom_report",
+                    f"Generated a custom PDF report ({count} item{'s' if count != 1 else ''})")
     return {"pdf_base64": base64.b64encode(pdf_bytes).decode('utf-8')}
 
 
@@ -382,6 +398,91 @@ def all_users_route(admin: dict = Depends(require_admin)):
     from chatbot.db import run_sql
     return run_sql('SELECT id, name, email, role, is_approved, created_at FROM users ORDER BY created_at DESC')
 
+@app.get("/audit-log/{user_id}")
+def audit_log_route(user_id: int, admin: dict = Depends(require_admin)):
+    """Step-by-step activity trail for one user (logins, predictions, reports,
+    scrapes, chat questions, admin actions) - admin only."""
+    from sqlalchemy import text
+    from chatbot.db import pg_engine
+    with pg_engine.connect() as conn:
+        target = conn.execute(
+            text("SELECT name, email, role, is_approved, created_at FROM users WHERE id = :id"),
+            {"id": user_id},
+        ).mappings().first()
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"user": dict(target), "actions": get_user_timeline(target["email"], target["name"])}
+
+# Warnings - admin picks flagged actions from a user's audit log, an LLM
+# drafts a formal letter (admin can edit before sending), then it's saved
+# (visible to that user on their own Warnings tab) and optionally emailed.
+
+def _lookup_user(user_id: int) -> dict:
+    from sqlalchemy import text
+    from chatbot.db import pg_engine
+    with pg_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT name, email FROM users WHERE id = :id"), {"id": user_id}
+        ).mappings().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return dict(row)
+
+class GenerateWarningRequest(BaseModel):
+    user_id: int
+    actions: list[dict]
+
+@app.post("/warnings/generate")
+def generate_warning_route(req: GenerateWarningRequest, admin: dict = Depends(require_admin)):
+    if not req.actions:
+        raise HTTPException(status_code=400, detail="Select at least one action to warn about.")
+    target = _lookup_user(req.user_id)
+    letter = generate_warning_letter(target["name"], admin.get("name"), req.actions)
+    return {"letter": letter}
+
+class SendWarningRequest(BaseModel):
+    user_id: int
+    letter: str
+    send_email: bool = False
+    actions: list[dict] = []
+
+@app.post("/warnings/send")
+def send_warning_route(req: SendWarningRequest, admin: dict = Depends(require_admin)):
+    target = _lookup_user(req.user_id)
+    emailed = False
+    if req.send_email:
+        try:
+            emailed = send_warning_email(target["email"], req.letter)
+        except Exception as exc:
+            print(f"[warnings] email failed for {target['email']}: {exc}")
+    warning_id = create_warning(target["email"], target["name"], req.letter, req.actions,
+                                 admin.get("email"), admin.get("name"), emailed)
+    log_action(admin.get("email"), admin.get("name"), "issue_warning",
+               f"Issued a warning to {target['name']} ({target['email']})" + (" - emailed" if emailed else ""))
+    return {"id": warning_id, "emailed": emailed}
+
+@app.get("/warnings/mine")
+def my_warnings_route(user: dict = Depends(get_current_user)):
+    return get_warnings_for_user(user.get("email"))
+
+@app.get("/warnings/sent")
+def sent_warnings_route(admin: dict = Depends(require_admin)):
+    """Every warning issued, across all recipients - the admin's own
+    'Warnings Sent' view, since no one sends the admin a warning."""
+    return get_all_sent_warnings()
+
+class WarningPdfRequest(BaseModel):
+    letter: str
+
+@app.post("/warnings/pdf")
+def warning_pdf_route(req: WarningPdfRequest, user: dict = Depends(get_current_user)):
+    """Renders whatever letter text the caller already has on screen - an
+    admin's in-progress draft, or a user's own already-saved warning - as a
+    PDF. No extra ownership check needed: the input is text the caller can
+    already read, not a lookup by id."""
+    pdf_bytes = build_warning_pdf(req.letter)
+    return {"pdf_base64": base64.b64encode(pdf_bytes).decode("utf-8")}
+
 @app.post("/auth/verify-password")
 def verify_password_route(req: VerifyPasswordRequest, admin: dict = Depends(require_admin)):
     if req.email != admin.get("email"):
@@ -390,7 +491,7 @@ def verify_password_route(req: VerifyPasswordRequest, admin: dict = Depends(requ
 
 @app.post("/auth/approve/{user_id}")
 def approve_user_route(user_id: int, admin: dict = Depends(require_admin)):
-    if not approve_user(user_id):
+    if not approve_user(user_id, admin.get("email"), admin.get("name")):
         raise HTTPException(status_code=404, detail="User not found")
     return {"approved": user_id}
 
@@ -398,7 +499,7 @@ def approve_user_route(user_id: int, admin: dict = Depends(require_admin)):
 def delete_user_route(user_id: int, admin: dict = Depends(require_admin)):
     # Used for both "reject pending request" and "delete account".
     try:
-        deleted = delete_user(user_id)
+        deleted = delete_user(user_id, admin.get("email"), admin.get("name"))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     if not deleted:
@@ -427,14 +528,22 @@ def dashboard_stats():
     return _DASHBOARD_DATA
 
 @app.post("/predict/profitability", response_model=PredictionResponse)
-def predict_profitability(order: OrderInput):
+def predict_profitability(order: OrderInput, user: Optional[dict] = Depends(get_current_user_optional)):
     result = run_notebook(order)["profitability"]
-    return PredictionResponse(**result, model_source="model")
+    response = PredictionResponse(**result, model_source="model")
+    if user:
+        log_action(user.get("email"), user.get("name"), "predict_profitability",
+                    f"Predicted profitability: {response.prediction} ({response.confidence:.0f}% confidence)")
+    return response
 
 @app.post("/predict/payment-delay", response_model=PredictionResponse)
-def predict_payment_delay(order: OrderInput):
+def predict_payment_delay(order: OrderInput, user: Optional[dict] = Depends(get_current_user_optional)):
     result = run_notebook(order)["payment_delay"]
-    return PredictionResponse(**result, model_source="model")
+    response = PredictionResponse(**result, model_source="model")
+    if user:
+        log_action(user.get("email"), user.get("name"), "predict_payment_delay",
+                    f"Predicted payment delay: {response.prediction} ({response.confidence:.0f}% confidence)")
+    return response
 
 #Blog - live textile industry news
 
@@ -465,23 +574,29 @@ class ScrapeRequest(BaseModel):
 
 
 @app.post("/market-data/scrape")
-def market_data_scrape(req: ScrapeRequest):
+def market_data_scrape(req: ScrapeRequest, user: Optional[dict] = Depends(get_current_user_optional)):
     """Scrape a category page and stage the rows in the JSON file for review."""
     try:
         products = scrape_category(req.url, req.brand, req.category)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Scrape failed: {exc}") from exc
     save_to_json(products)
+    if user:
+        log_action(user.get("email"), user.get("name"), "scrape",
+                    f"Scraped {req.brand} ({len(products)} products)")
     return {"count": len(products), "products": products}
 
 
 @app.post("/market-data/save")
-def market_data_save():
+def market_data_save(user: Optional[dict] = Depends(get_current_user_optional)):
     """Load the currently-staged JSON scrape into the scraped_products table."""
     products = load_from_json()
     if not products:
         raise HTTPException(status_code=400, detail="Nothing to save - run a scrape first.")
     inserted = save_products(products)
+    if user:
+        log_action(user.get("email"), user.get("name"), "save_scrape",
+                    f"Saved {inserted} scraped products to the database")
     return {"inserted": inserted}
 
 
