@@ -42,6 +42,8 @@ const ICON_PATHS = {
   globe: <><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>,
   database: <><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" /><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" /></>,
   activity: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />,
+  mic: <><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></>,
+  volume2: <><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" /></>,
 };
 
 function Icon({ name, size = 18 }) {
@@ -2423,6 +2425,32 @@ function useChatbot() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([{ role: 'bot', text: CHAT_GREETING }]);
   const [sending, setSending] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceError, setVoiceError] = useState(null);
+
+  // Voice input (voice-input.js -> window.VoiceInput). Fills the question
+  // box with the live transcript rather than auto-sending it, so a misheard
+  // word can be fixed before it goes to the chatbot.
+  function toggleListening() {
+    if (!window.VoiceInput || !window.VoiceInput.isSupported()) {
+      setVoiceError('Voice input is not supported in this browser.');
+      return;
+    }
+    if (listening) {
+      window.VoiceInput.stop();
+      return;
+    }
+    setVoiceError(null);
+    setListening(true);
+    window.VoiceInput.start({
+      onResult: (transcript) => setInput(transcript),
+      onError: (code) => {
+        setListening(false);
+        setVoiceError(code === 'not-allowed' ? 'Microphone access was denied.' : `Voice input error: ${code}`);
+      },
+      onEnd: () => setListening(false),
+    });
+  }
 
   async function handleSend(e) {
     e.preventDefault();
@@ -2494,7 +2522,10 @@ function useChatbot() {
     }
   }
 
-  return { input, setInput, messages, sending, handleSend, removeMessage, showChart };
+  return {
+    input, setInput, messages, sending, handleSend, removeMessage, showChart,
+    listening, voiceError, toggleListening,
+  };
 }
 
 // Per-bubble "..." menu in the live conversation - offers Copy and Remove.
@@ -2591,6 +2622,26 @@ function ChatProductCards({ rows }) {
 
 function ChatMessage({ message, index, onRemove, onShowChart, onAddToDashboard }) {
   const isUser = message.role === 'user';
+  const [speaking, setSpeaking] = useState(false);
+
+  // Voice output (voice-output.js -> window.VoiceOutput). speak() itself
+  // cancels any other bubble currently talking, so clicking a second "Listen"
+  // button takes over cleanly; onError also resets this bubble's own state in
+  // case IT was the one just interrupted.
+  function handleSpeak() {
+    if (!window.VoiceOutput || !window.VoiceOutput.isSupported()) return;
+    if (speaking) {
+      window.VoiceOutput.stop();
+      setSpeaking(false);
+      return;
+    }
+    setSpeaking(true);
+    window.VoiceOutput.speak(message.text, {
+      onEnd: () => setSpeaking(false),
+      onError: () => setSpeaking(false),
+    });
+  }
+
   return (
     <div className={`chat-message ${isUser ? 'chat-message-user' : 'chat-message-bot'}`}>
       <div className="chat-message-col">
@@ -2601,6 +2652,17 @@ function ChatMessage({ message, index, onRemove, onShowChart, onAddToDashboard }
             <>
               <ChatBubbleMenu text={message.text} onRemove={() => onRemove(index)} />
               <p className="chat-bubble-text">{message.text}</p>
+              {!isUser && window.VoiceOutput && window.VoiceOutput.isSupported() && (
+                <button
+                  type="button"
+                  className={`chat-speak-btn${speaking ? ' chat-speak-btn-active' : ''}`}
+                  onClick={handleSpeak}
+                  aria-label={speaking ? 'Stop reading aloud' : 'Read answer aloud'}
+                >
+                  <Icon name="volume2" size={13} />
+                  <span>{speaking ? 'Stop' : 'Listen'}</span>
+                </button>
+              )}
               {/* sql/data are optional debug context returned by ask_chatbot -
                   shown collapsed so the primary answer stays the focus */}
               {message.sql && (
@@ -2856,7 +2918,10 @@ function ChatWidget({ onAddToDashboard }) {
   const [history, setHistory] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(null);
-  const { input, setInput, messages, sending, handleSend, removeMessage, showChart } = useChatbot();
+  const {
+    input, setInput, messages, sending, handleSend, removeMessage, showChart,
+    listening, voiceError, toggleListening,
+  } = useChatbot();
 
   useEffect(() => {
     if (view !== 'history') return undefined;
@@ -2920,6 +2985,7 @@ function ChatWidget({ onAddToDashboard }) {
                 ))}
               </div>
 
+              {voiceError && <div className="chat-voice-error">{voiceError}</div>}
               <form className="chat-panel-footer" onSubmit={handleSend}>
                 <input
                   type="text"
@@ -2928,6 +2994,17 @@ function ChatWidget({ onAddToDashboard }) {
                   onChange={(e) => setInput(e.target.value)}
                   disabled={sending}
                 />
+                {window.VoiceInput && window.VoiceInput.isSupported() && (
+                  <button
+                    type="button"
+                    className={`chat-mic-btn${listening ? ' chat-mic-btn-listening' : ''}`}
+                    onClick={toggleListening}
+                    disabled={sending}
+                    aria-label={listening ? 'Stop listening' : 'Ask by voice'}
+                  >
+                    <Icon name="mic" size={16} />
+                  </button>
+                )}
                 <button type="submit" className="chat-send-btn" disabled={sending || !input.trim()} aria-label="Send">
                   <Icon name="send" size={16} />
                 </button>
@@ -2956,7 +3033,10 @@ function ChatWidget({ onAddToDashboard }) {
 // in with more room to read longer answers. Independent conversation
 // history from the widget (see useChatbot).
 function ChatPage({ onAddToDashboard }) {
-  const { input, setInput, messages, sending, handleSend, removeMessage, showChart } = useChatbot();
+  const {
+    input, setInput, messages, sending, handleSend, removeMessage, showChart,
+    listening, voiceError, toggleListening,
+  } = useChatbot();
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -3019,6 +3099,7 @@ function ChatPage({ onAddToDashboard }) {
             ))}
           </div>
 
+          {voiceError && <div className="chat-voice-error">{voiceError}</div>}
           <form className="chat-panel-footer" onSubmit={handleSend}>
             <input
               type="text"
@@ -3027,6 +3108,17 @@ function ChatPage({ onAddToDashboard }) {
               onChange={(e) => setInput(e.target.value)}
               disabled={sending}
             />
+            {window.VoiceInput && window.VoiceInput.isSupported() && (
+              <button
+                type="button"
+                className={`chat-mic-btn${listening ? ' chat-mic-btn-listening' : ''}`}
+                onClick={toggleListening}
+                disabled={sending}
+                aria-label={listening ? 'Stop listening' : 'Ask by voice'}
+              >
+                <Icon name="mic" size={16} />
+              </button>
+            )}
             <button type="submit" className="chat-send-btn" disabled={sending || !input.trim()} aria-label="Send">
               <Icon name="send" size={16} />
             </button>

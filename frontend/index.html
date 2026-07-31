@@ -6,12 +6,14 @@
     <title>US Group Analytics</title>
     <link rel="icon" type="image/png" href="/logo-lion.png" />
     <script>
-      // always fetch a fresh stylesheet - avoids the browser serving a stale
-      // cached style.css after edits (mirrors the no-store fetch for app.js below)
-      const styleLink = document.createElement('link');
-      styleLink.rel = 'stylesheet';
-      styleLink.href = '/style.css?t=' + Date.now();
-      document.head.appendChild(styleLink);
+      // always fetch fresh stylesheets - avoids the browser serving stale
+      // cached CSS after edits (mirrors the no-store fetch for app.js below)
+      ['/style.css', '/voice.css'].forEach((href) => {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = href + '?t=' + Date.now();
+        document.head.appendChild(link);
+      });
     </script>
   </head>
   <body>
@@ -23,6 +25,12 @@
     <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
     <!-- Google Identity Services: powers the "Continue with Google" button -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <!-- Voice feature (speech-to-text / text-to-speech): plain scripts, not
+         run through the Babel/JSX step below, so they must load first - the
+         chat components in app.js call window.VoiceInput / window.VoiceOutput
+         directly, expecting both to already exist. -->
+    <script src="/voice-input.js"></script>
+    <script src="/voice-output.js"></script>
     <script>
       fetch('/app.js', { cache: 'no-store' }) // always get the latest app.js, never a stale cached copy
         .then((r) => r.text())
