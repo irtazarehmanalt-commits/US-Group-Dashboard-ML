@@ -1,6 +1,7 @@
 import base64
 import io
-import ollama
+import os
+from ollama import Client
 from pathlib import Path
 from datetime import datetime
 from reportlab.lib.pagesizes import letter
@@ -12,6 +13,12 @@ from reportlab.lib import colors
 GRAPHITE = colors.HexColor('#25272C')
 ACCENT = colors.HexColor('#0f7a5c')
 RULE_COLOR = colors.HexColor('#dddddd')
+
+# Cloud, not local - see chatbot/answer_generator.py for why.
+client = Client(
+    host="https://ollama.com",
+    headers={"Authorization": "Bearer " + os.getenv("OLAMA_API_KEY", "")},
+)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 LION_LOGO = FRONTEND_DIR / "logo-lion.png"
@@ -59,8 +66,8 @@ def _draw_header_footer(canvas, doc):
 
 
 def write_report_paragraph(question: str, answer: str) -> str:
-    response = ollama.chat(
-        model="llama3.1",
+    response = client.chat(
+        model="gpt-oss:120b-cloud",
         messages=[
             {"role": "user", "content":
                 f"Rewrite this as a single polished, professional business-report "
@@ -68,7 +75,7 @@ def write_report_paragraph(question: str, answer: str) -> str:
                 f"Original question: {question}\nOriginal finding: {answer}"}
         ]
     )
-    return response['message']['content'].strip()
+    return response.message.content.strip()
 
 
 def build_custom_report_pdf(selected_charts: list[dict]) -> bytes:
