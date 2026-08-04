@@ -264,18 +264,36 @@ def generate_chat_chart(req: ChartRequest):
 
 
 @app.get("/chat/history")
-def get_chat_history():
-    from chatbot.db import run_sql
-    rows = run_sql('SELECT id, question, answer, user_name, created_at FROM chat_history ORDER BY created_at DESC LIMIT 50')
-    return rows
-
-
-@app.delete("/chat/history/{item_id}")
-def delete_chat_history_item(item_id: int):
+def get_chat_history(user: dict = Depends(get_current_user)):
     from sqlalchemy import text
     from chatbot.db import pg_engine
     with pg_engine.connect() as conn:
-        result = conn.execute(text("DELETE FROM chat_history WHERE id = :id"), {"id": item_id})
+        if user.get("role") == "admin":
+            rows = conn.execute(
+                text("SELECT id, question, answer, user_name, created_at FROM chat_history "
+                     "ORDER BY created_at DESC LIMIT 50")
+            )
+        else:
+            rows = conn.execute(
+                text("SELECT id, question, answer, user_name, created_at FROM chat_history "
+                     "WHERE user_name = :name ORDER BY created_at DESC LIMIT 50"),
+                {"name": user.get("name")},
+            )
+        return [dict(r._mapping) for r in rows]
+
+
+@app.delete("/chat/history/{item_id}")
+def delete_chat_history_item(item_id: int, user: dict = Depends(get_current_user)):
+    from sqlalchemy import text
+    from chatbot.db import pg_engine
+    with pg_engine.connect() as conn:
+        if user.get("role") == "admin":
+            result = conn.execute(text("DELETE FROM chat_history WHERE id = :id"), {"id": item_id})
+        else:
+            result = conn.execute(
+                text("DELETE FROM chat_history WHERE id = :id AND user_name = :name"),
+                {"id": item_id, "name": user.get("name")},
+            )
         conn.commit()
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="History item not found")
