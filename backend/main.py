@@ -124,10 +124,11 @@ def _load_dashboard_data():
     average that already outperformed all of them, labeled honestly as a
     trend estimate rather than a validated prediction.
     """
-    if not DATASET_CSV_PATH.exists():
+    from chatbot.db import pg_engine
+    try:
+        df = pd.read_sql("SELECT * FROM orders", pg_engine)
+    except Exception:
         return None
-
-    df = pd.read_csv(DATASET_CSV_PATH)
 
     top_customers = (
         df.groupby("Customer_Name")["Net_Profit_USD"].sum().sort_values(ascending=False).head(5)
@@ -524,7 +525,7 @@ def options():
 @app.get("/dashboard-stats")
 def dashboard_stats():
     if _DASHBOARD_DATA is None:
-        raise HTTPException(status_code=500, detail=f"Dataset not found at {DATASET_CSV_PATH}")
+        raise HTTPException(status_code=500, detail="Dashboard insights unavailable - could not read the orders table.")
     return _DASHBOARD_DATA
 
 @app.post("/predict/profitability", response_model=PredictionResponse)
