@@ -44,6 +44,7 @@ const ICON_PATHS = {
   activity: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />,
   mic: <><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></>,
   volume2: <><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" /></>,
+  menu: <><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" /></>,
 };
 
 function Icon({ name, size = 18 }) {
@@ -775,10 +776,43 @@ function LoginSignupPage({ onLoginSuccess }) {
 // Small presentational components
 // ---------------------------------------------------------------------------
 
+// Below the mobile breakpoint (see .sidebar-mobile-toggle / .sidebar-backdrop
+// in style.css) the sidebar becomes a hidden off-canvas drawer instead of the
+// always-visible icon rail tablets get - opened via a hamburger button,
+// closed by tapping the backdrop or picking a page. Above that breakpoint,
+// mobileOpen/the toggle button/backdrop simply have no visual effect (hidden
+// by CSS), so this is a no-op on desktop.
 function Sidebar({ page, onNavigate, onLogout, role }) {
+  const [mobileOpen, setMobileOpen] = useState(false);
   const linkClass = (target) => `sidebar-link${page === target ? ' active' : ''}`;
+
+  function navigateAndClose(target) {
+    onNavigate(target);
+    setMobileOpen(false);
+  }
+
   return (
-    <aside className="sidebar">
+    <>
+      <button
+        type="button"
+        className="sidebar-mobile-toggle"
+        onClick={() => setMobileOpen(true)}
+        aria-label="Open navigation menu"
+      >
+        <Icon name="menu" size={20} />
+      </button>
+      {mobileOpen && (
+        <div className="sidebar-backdrop" onClick={() => setMobileOpen(false)} />
+      )}
+      <aside className={`sidebar${mobileOpen ? ' sidebar-mobile-open' : ''}`}>
+        <button
+          type="button"
+          className="sidebar-mobile-close"
+          onClick={() => setMobileOpen(false)}
+          aria-label="Close navigation menu"
+        >
+          <Icon name="close" size={18} />
+        </button>
       <div className="sidebar-brand-card">
         <img src="/logo-lion.png" alt="" className="brand-lion" />
         <span className="brand-divider" />
@@ -786,43 +820,43 @@ function Sidebar({ page, onNavigate, onLogout, role }) {
       </div>
       <div className="sidebar-app-label">Analytics</div>
       <nav className="sidebar-nav">
-        <button className={linkClass('dashboard')} onClick={() => onNavigate('dashboard')}>
+        <button className={linkClass('dashboard')} onClick={() => navigateAndClose('dashboard')}>
           <Icon name="dashboard" size={17} />
           <span>Dashboard</span>
         </button>
-        <button className={linkClass('profitability')} onClick={() => onNavigate('profitability')}>
+        <button className={linkClass('profitability')} onClick={() => navigateAndClose('profitability')}>
           <Icon name="trendingUp" size={17} />
           <span>Profitability Predictor</span>
         </button>
-        <button className={linkClass('payment-delay')} onClick={() => onNavigate('payment-delay')}>
+        <button className={linkClass('payment-delay')} onClick={() => navigateAndClose('payment-delay')}>
           <Icon name="clock" size={17} />
           <span>Payment Delay Predictor</span>
         </button>
-        <button className={linkClass('chat')} onClick={() => onNavigate('chat')}>
+        <button className={linkClass('chat')} onClick={() => navigateAndClose('chat')}>
           <Icon name="message" size={17} />
           <span>Ask US Group</span>
         </button>
-        <button className={linkClass('blog')} onClick={() => onNavigate('blog')}>
+        <button className={linkClass('blog')} onClick={() => navigateAndClose('blog')}>
           <Icon name="newspaper" size={17} />
           <span>Blog</span>
         </button>
         {/* added: market scraper tab */}
-        <button className={linkClass('scraper')} onClick={() => onNavigate('scraper')}>
+        <button className={linkClass('scraper')} onClick={() => navigateAndClose('scraper')}>
           <Icon name="globe" size={17} />
           <span>Market Scraper</span>
         </button>
-        <button className={linkClass('warnings')} onClick={() => onNavigate('warnings')}>
+        <button className={linkClass('warnings')} onClick={() => navigateAndClose('warnings')}>
           <Icon name="alertTriangle" size={17} />
           <span>Warnings</span>
         </button>
         {role === 'admin' && (
-          <button className={linkClass('admin')} onClick={() => onNavigate('admin')}>
+          <button className={linkClass('admin')} onClick={() => navigateAndClose('admin')}>
             <Icon name="lock" size={17} />
             <span>Accounts</span>
           </button>
         )}
         {role === 'admin' && (
-          <button className={linkClass('audit-log')} onClick={() => onNavigate('audit-log')}>
+          <button className={linkClass('audit-log')} onClick={() => navigateAndClose('audit-log')}>
             <Icon name="activity" size={17} />
             <span>Audit Log</span>
           </button>
@@ -835,7 +869,8 @@ function Sidebar({ page, onNavigate, onLogout, role }) {
           <span>Log out</span>
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }
 
@@ -1460,7 +1495,7 @@ function BlogPagination({ page, pageCount, onChange }) {
 // a JSON file and shown here; (2) Save to Database -> those staged rows are
 // inserted into the scraped_products table, which the chatbot can then query.
 // ---------------------------------------------------------------------------
-function ScraperPage() {
+function ScraperPage({ auth }) {
   const [url, setUrl] = useState('');
   const [brand, setBrand] = useState('');
   const [scraped, setScraped] = useState(null); // products from the latest scrape
@@ -1469,6 +1504,13 @@ function ScraperPage() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null); // success line after a DB save
   const [recent, setRecent] = useState([]); // rows already in the database
+
+  // Batch "scrape all configured jeans brands" (admin only) - see
+  // scraper/batch_scrape.py's BRAND_TARGETS. Separate loading/error/result
+  // state from the single-URL form above since the two run independently.
+  const [batchScraping, setBatchScraping] = useState(false);
+  const [batchSummary, setBatchSummary] = useState(null);
+  const [batchError, setBatchError] = useState(null);
 
   function loadRecent() {
     apiRequest('/market-data/')
@@ -1515,6 +1557,21 @@ function ScraperPage() {
     }
   }
 
+  async function handleScrapeAllBrands() {
+    setBatchError(null);
+    setBatchSummary(null);
+    setBatchScraping(true);
+    try {
+      const res = await apiRequest('/market-data/scrape-brands', { method: 'POST' });
+      setBatchSummary(res.summary);
+      loadRecent();
+    } catch (err) {
+      setBatchError(err.message);
+    } finally {
+      setBatchScraping(false);
+    }
+  }
+
   return (
     <div className="app-content">
       <header className="page-header">
@@ -1550,6 +1607,41 @@ function ScraperPage() {
       {error && <div className="form-error">{error}</div>}
       {notice && <div className="scraper-notice">{notice}</div>}
 
+      {auth?.role === 'admin' && (
+        <div className="card card-padded scraper-batch-card">
+          <div className="scraper-results-head">
+            <div>
+              <h2>Scrape all configured brands</h2>
+              <p className="scraper-batch-subtitle">
+                Arket, The Frankie Shop, Zara, Diesel, Levi's, and H&amp;M - Women's and Men's jeans,
+                auto-tagged with a fit category, saved to the database, and written to
+                backend/scraper_data/ as one JSON file per brand. Hits 12 real pages; can take
+                several minutes.
+              </p>
+            </div>
+            <button className="btn btn-primary" onClick={handleScrapeAllBrands} disabled={batchScraping}>
+              {batchScraping && <span className="spinner" />}
+              {batchScraping ? 'Scraping all brands...' : 'Scrape All Brands'}
+            </button>
+          </div>
+          {batchError && <div className="form-error">{batchError}</div>}
+          {batchSummary && (
+            <ul className="scraper-batch-summary">
+              {Object.entries(batchSummary).map(([brandName, s]) => (
+                <li key={brandName} className="scraper-batch-row">
+                  <span className="scraper-batch-brand">{brandName}</span>
+                  <span>{s.scraped} scraped &middot; {s.classified} fit-tagged</span>
+                  <span>{s.json_file || 'no file written'}</span>
+                  {s.errors.length > 0 && (
+                    <span className="scraper-batch-errors">{s.errors.join('; ')}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {scraped && scraped.length > 0 && (
         <div className="card scraper-results">
           <div className="scraper-results-head">
@@ -1577,8 +1669,12 @@ function ScraperPage() {
   );
 }
 
-// added: shared table for both freshly-scraped rows and saved DB rows
+// added: shared table for both freshly-scraped rows and saved DB rows.
+// Fit Category/Sub-Category columns only appear when at least one row
+// actually has them (set by the fit-taxonomy classifier - see
+// scraper/fit_taxonomy.py - not every scrape is jeans, so most rows won't).
 function ScrapedTable({ rows, showImage }) {
+  const showFit = rows.some((r) => r.fit_category);
   return (
     <div className="scraper-table-wrap">
       <table className="scraper-table">
@@ -1588,6 +1684,8 @@ function ScrapedTable({ rows, showImage }) {
             <th>Brand</th>
             <th>Name</th>
             <th>Price</th>
+            {showFit && <th>Fit Category</th>}
+            {showFit && <th>Fit Sub-Category</th>}
           </tr>
         </thead>
         <tbody>
@@ -1599,6 +1697,8 @@ function ScrapedTable({ rows, showImage }) {
               <td>{r.brand}</td>
               <td>{r.name}</td>
               <td>{r.price}</td>
+              {showFit && <td>{r.fit_category || '-'}</td>}
+              {showFit && <td>{r.fit_sub_category || '-'}</td>}
             </tr>
           ))}
         </tbody>
@@ -1843,10 +1943,10 @@ function AdminPage({ auth }) {
                   <tbody>
                     {pending.map((u) => (
                       <tr key={u.id}>
-                        <td>{u.name}</td>
-                        <td>{u.email}</td>
-                        <td>{formatHistoryTimestamp(u.created_at)}</td>
-                        <td>
+                        <td data-label="Name">{u.name}</td>
+                        <td data-label="Email">{u.email}</td>
+                        <td data-label="Created">{formatHistoryTimestamp(u.created_at)}</td>
+                        <td data-label="">
                           <div className="admin-actions">
                             <button
                               type="button"
@@ -1895,13 +1995,13 @@ function AdminPage({ auth }) {
                   <tbody>
                     {created.map((u) => (
                       <tr key={u.id}>
-                        <td>{u.name}</td>
-                        <td>{u.email}</td>
-                        <td>
+                        <td data-label="Name">{u.name}</td>
+                        <td data-label="Email">{u.email}</td>
+                        <td data-label="Role">
                           <span className={`admin-role-badge admin-role-${u.role}`}>{u.role}</span>
                         </td>
-                        <td>{formatHistoryTimestamp(u.created_at)}</td>
-                        <td>
+                        <td data-label="Created">{formatHistoryTimestamp(u.created_at)}</td>
+                        <td data-label="">
                           {/* admin accounts are protected - no delete button */}
                           {u.role !== 'admin' && (
                             <button
@@ -2289,11 +2389,11 @@ function AuditLogPage({ auth }) {
               <tbody>
                 {users.map((u) => (
                   <tr key={u.id} className="audit-user-row" onClick={() => openUser(u)}>
-                    <td>{u.name}</td>
-                    <td>{u.email}</td>
-                    <td><span className={`admin-role-badge admin-role-${u.role}`}>{u.role}</span></td>
-                    <td>{u.is_approved ? 'Approved' : 'Pending'}</td>
-                    <td>
+                    <td data-label="Name">{u.name}</td>
+                    <td data-label="Email">{u.email}</td>
+                    <td data-label="Role"><span className={`admin-role-badge admin-role-${u.role}`}>{u.role}</span></td>
+                    <td data-label="Status">{u.is_approved ? 'Approved' : 'Pending'}</td>
+                    <td data-label="">
                       <button
                         type="button"
                         className="btn btn-ghost admin-row-btn"
@@ -3258,7 +3358,7 @@ function App() {
         )}
         {page === 'chat' && <ChatPage onAddToDashboard={addPinnedChart} />}
         {page === 'blog' && <BlogPage />}
-        {page === 'scraper' && <ScraperPage />}
+        {page === 'scraper' && <ScraperPage auth={auth} />}
         {page === 'warnings' && <WarningsPage auth={auth} />}
         {page === 'admin' && auth.role === 'admin' && <AdminPage auth={auth} />}
         {page === 'audit-log' && auth.role === 'admin' && <AuditLogPage auth={auth} />}

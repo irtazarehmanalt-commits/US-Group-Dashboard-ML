@@ -87,6 +87,11 @@ def create_scraped_products_table():
                 scraped_at TIMESTAMP DEFAULT now()
             )
         """))
+        # covers databases where the table already existed before fit
+        # classification (fit_taxonomy.py) was added - both nullable, since
+        # not every scrape is jeans/denim and not every name matches a fit
+        conn.execute(text("ALTER TABLE scraped_products ADD COLUMN IF NOT EXISTS fit_category TEXT"))
+        conn.execute(text("ALTER TABLE scraped_products ADD COLUMN IF NOT EXISTS fit_sub_category TEXT"))
         conn.commit()
     print("scraped_products table ready.")
 
@@ -155,8 +160,10 @@ def save_products(products: list) -> int:
         for p in products:
             conn.execute(
                 text("""
-                    INSERT INTO scraped_products (brand, name, price, category, url, image_url)
-                    VALUES (:brand, :name, :price, :category, :url, :image_url)
+                    INSERT INTO scraped_products
+                        (brand, name, price, category, url, image_url, fit_category, fit_sub_category)
+                    VALUES
+                        (:brand, :name, :price, :category, :url, :image_url, :fit_category, :fit_sub_category)
                 """),
                 {
                     "brand": p.get("brand"),
@@ -165,6 +172,8 @@ def save_products(products: list) -> int:
                     "category": p.get("category"),
                     "url": p.get("url"),
                     "image_url": p.get("image_url"),
+                    "fit_category": p.get("fit_category"),
+                    "fit_sub_category": p.get("fit_sub_category"),
                 },
             )
         conn.commit()

@@ -1156,7 +1156,9 @@ input, select {
   }
 }
 
-@media (max-width: 860px) {
+/* Tablet range only - true phones (<=640px) get a hidden off-canvas drawer
+   instead, defined further down where the rest of the mobile layout lives. */
+@media (max-width: 860px) and (min-width: 641px) {
   .sidebar {
     width: 76px;
     padding: 20px 10px;
@@ -1172,6 +1174,87 @@ input, select {
 
   .sidebar-link {
     justify-content: center;
+  }
+}
+
+.sidebar-mobile-toggle,
+.sidebar-mobile-close,
+.sidebar-backdrop {
+  display: none;
+}
+
+/* Phones: sidebar becomes a hidden off-canvas drawer (full nav, with labels -
+   not the tablet icon rail above), opened by a hamburger button fixed to the
+   top-left corner and closed by the X inside it, the backdrop, or picking a
+   page (see navigateAndClose in the Sidebar component). */
+@media (max-width: 640px) {
+  .sidebar-mobile-toggle {
+    display: flex;
+    position: fixed;
+    top: 14px;
+    left: 14px;
+    z-index: 220;
+    width: 40px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-surface-strong);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-primary);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    cursor: pointer;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(4, 6, 12, 0.6);
+    z-index: 190;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: min(280px, 82vw);
+    padding: 24px 18px;
+    z-index: 200;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .sidebar-mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-mobile-close {
+    display: flex;
+    align-self: flex-end;
+    width: 32px;
+    height: 32px;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    margin-bottom: 8px;
+  }
+
+  /* app-content no longer needs to make room for a permanently-visible
+     sidebar - the drawer floats above everything instead */
+  .app-shell {
+    display: block;
+  }
+
+  .app-content {
+    padding: 76px 16px 40px;
   }
 }
 
@@ -1961,6 +2044,62 @@ input, select {
   border-bottom: none;
 }
 
+/* Phones: the table's columns don't fit, and horizontal-scrolling a table
+   buried inside a card is easy to miss and hides the actual action buttons
+   off-screen - so each row becomes its own stacked card instead. Relies on
+   the data-label attribute already present on every <td> (see AdminPage /
+   AuditLogPage in app.js) to show a label before each value. */
+@media (max-width: 640px) {
+  .admin-table-wrap {
+    overflow-x: visible;
+  }
+
+  .admin-users-table thead {
+    display: none;
+  }
+
+  .admin-users-table,
+  .admin-users-table tbody,
+  .admin-users-table tr {
+    display: block;
+    width: 100%;
+  }
+
+  .admin-users-table tr {
+    margin-bottom: 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 4px 12px;
+  }
+
+  .admin-users-table tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .admin-users-table td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    text-align: right;
+  }
+
+  .admin-users-table td[data-label]:not([data-label=""])::before {
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 620;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-muted);
+    text-align: left;
+  }
+
+  .admin-users-table td[data-label=""] {
+    justify-content: flex-end;
+  }
+}
+
 .admin-role-badge {
   display: inline-block;
   font-size: 11px;
@@ -2524,6 +2663,52 @@ input, select {
 .scraper-empty {
   color: var(--color-text-muted);
   font-size: 14px;
+}
+
+.scraper-batch-card {
+  margin-bottom: 22px;
+}
+
+.scraper-batch-card .scraper-results-head {
+  align-items: flex-start;
+}
+
+.scraper-batch-subtitle {
+  margin-top: 4px;
+  max-width: 560px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.scraper-batch-summary {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.scraper-batch-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.scraper-batch-brand {
+  font-weight: 620;
+  color: var(--color-text-primary);
+  min-width: 130px;
+}
+
+.scraper-batch-errors {
+  color: var(--color-danger);
 }
 
 /* reusable ghost button (first used on this page) */

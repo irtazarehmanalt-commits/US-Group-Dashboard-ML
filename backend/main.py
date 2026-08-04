@@ -616,11 +616,28 @@ def market_data_list(brand: Optional[str] = None, category: Optional[str] = None
     from chatbot.db import pg_engine
     with pg_engine.connect() as conn:
         rows = conn.execute(
-            text(f"SELECT id, brand, name, price, category, url, image_url, scraped_at "
+            text(f"SELECT id, brand, name, price, category, url, image_url, "
+                 f"fit_category, fit_sub_category, scraped_at "
                  f"FROM scraped_products {where} ORDER BY scraped_at DESC LIMIT 200"),
             params,
         )
         return [dict(r._mapping) for r in rows]
+
+
+@app.post("/market-data/scrape-brands")
+def market_data_scrape_brands(admin: dict = Depends(require_admin)):
+    """Scrape every configured brand's Women's/Men's jeans page (see
+    scraper/batch_scrape.py's BRAND_TARGETS), tag each product with a fit
+    category via the taxonomy, save everything to scraped_products, and write
+    one JSON file per brand into backend/scraper_data/. Admin-only and
+    synchronous - this hits 6 real retail sites (12 pages) and can take
+    several minutes, unlike the single-URL manual scrape above."""
+    from scraper.batch_scrape import scrape_all_configured_brands
+    summary = scrape_all_configured_brands()
+    total_scraped = sum(b["scraped"] for b in summary.values())
+    log_action(admin.get("email"), admin.get("name"), "scrape_brands",
+               f"Batch-scraped {len(summary)} brands ({total_scraped} products)")
+    return {"summary": summary}
 
 
 # added: kick off the 6-hourly background scraper when the server starts
